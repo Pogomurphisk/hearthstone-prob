@@ -1,0 +1,427 @@
+```{r}
+library(dplyr)
+library(tibble)
+library(ggplot2)
+```
+
+```{r}
+# Takes in deck_size (number of cards in the deck), find_num (number of cards that need to be found), d_find_num (number of cards that can't be found), and draw_num (number of cards that are drawn). The function outputs the probability of finding find_num distinct cards andnot finding d_find_num distinct cards with a deck size of deck_size in draw_num number of draws.
+p_draw_before <- function(deck_size, find_num, d_find_num, draw_num) {
+  c_draw = choose(deck_size - find_num - d_find_num, draw_num - find_num)
+  c_total = choose(deck_size, draw_num)
+  p = c_draw / c_total
+  return(p)
+}
+```
+
+```{r}
+# Similar to p_draw_before, except it takes into account the mulligan, where you are actively looking for the find_num cards in the mulligan. Mulligan size depends on whether the player goes first or not.
+p_draw_before_m <- function(deck_size, find_num, d_find_num, draw_num, first){
+  p_m = data.frame(0:card_num %*% t(rep(1,4)))
+  colnames(p_m) <- c("cards_found", "m_prob", "ways_to_find","d_prob")
+  p_m <-
+    p_m %>%
+    mutate_at(vars(ways_to_find), funs(wtf(card_num, .))) %>%
+    mutate_at(vars(m_prob), funs(p_m_find(deck_size, find_num, d_find_num, first, .))) %>%
+    mutate_at(vars(d_prob), funs(adj_draw_before(deck_size, find_num, d_find_num, draw_num, .))) %>%
+    mutate(prob = m_prob * d_prob * ways_to_find)
+  p = sum(p_m$prob)
+  return (p)
+}
+
+# Calculates the ways of finding find_num cards given how many cards are found in the mulligan
+wtf <- function(find_num, cards_found){
+  c = choose(find_num, cards_found)
+}
+  
+# Calculates the probability of finding cards_found cards, given we are looking for find_num cards and don't want d_find_num cards in the mulligan
+p_m_find <- function(deck_size, find_num, d_find_num, first, cards_found){
+  if (first){
+    mulligan_size = 3
+  }
+  else {
+    mulligan_size = 4
+  }
+  c = choose(deck_size - card_num - d_find_num, mulligan_size - cards_found)
+  c_total = choose(deck_size, mulligan_size)
+  p = c / c_total
+  return (p)
+}
+
+#Adjusts the deck_size, find_num, and draw_num values based on number of cards found and finds the probability of finding the remaining find_num cards and not finding the d_find_num cards
+adj_draw_before <- function(deck_size, find_num, d_find_num, draw_num, cards_found){
+  new_deck_size = deck_size - cards_found
+  new_find_num = find_num - cards_found
+  new_draw_num = draw_num - cards_found
+  p = p_draw_before(new_deck_size, new_find_num, d_find_num, new_draw_num)
+  return(p)
+}
+```
+
+```{r}
+p_t_empty = TRUE
+deck_size = 30
+find_num = 2
+d_find_num = 0
+
+for (draw_num in 3:30){
+  for(first in 0:1){
+    for (mull_strat in c("aggressive", "passive")){
+      if (mull_strat == "aggressive"){
+        p = p_draw_before_m(deck_size, find_num, d_find_num, draw_num, first)
+      }
+      else {
+        p = p_draw_before(deck_size, find_num, d_find_num, draw_num)
+      }
+      line = data.frame(t(c(draw_num, first, mull_strat, p)))
+      if (p_t_empty == FALSE) {
+        p_2_cards_by = bind_rows(p_2_cards_by, line)
+      }
+      if (p_t_empty == TRUE){
+        p_2_cards_by = line
+        p_t_empty = FALSE
+      }
+    }
+  }
+}
+
+colnames(p_2_cards_by) <- c("draw_num", "first", "mull_strat", "p")
+
+p_2_cards_by <-
+  p_2_cards_by %>%
+  mutate_at(vars(draw_num, first, p), funs(as.numeric(.))) %>%
+  filter(!(first == 0 & draw_num == 3)) %>%
+  mutate(turn = ifelse(first == 1, "first", "second")) %>%
+  mutate(turn_f = factor(turn, levels = c("first", "second")))
+```
+```{r}
+p_2_cards_by_first <-
+  p_2_cards_by %>%
+  filter(turn_f == "first")
+
+p_2_cards_by_second <-
+  p_2_cards_by %>%
+  filter(turn_f == "second")
+
+aggressive_first <-
+  p_2_cards_by_first %>%
+  filter(mull_strat == "aggressive") %>%
+  mutate(aggressive = p) %>%
+  select(draw_num, turn_f, aggressive)
+
+passive_first <-
+  p_2_cards_by_first %>%
+  filter(mull_strat == "passive") %>%
+  mutate(passive = p) %>%
+  select(draw_num, turn_f, passive)
+
+p_2_cards_by_first <-
+  aggressive_first %>%
+  left_join(passive_first, by = c("draw_num", "turn_f"))
+
+aggressive_second <-
+  p_2_cards_by_second %>%
+  filter(mull_strat == "aggressive") %>%
+  mutate(aggressive = p) %>%
+  select(draw_num, turn_f, aggressive)
+
+passive_second <-
+  p_2_cards_by_second %>%
+  filter(mull_strat == "passive") %>%
+  mutate(passive = p) %>%
+  select(draw_num, turn_f, passive)
+
+p_2_cards_by_second <-
+  aggressive_second %>%
+  left_join(passive_second, by = c("draw_num", "turn_f"))
+```
+
+```{r}
+first_vline = data.frame(xint=3,turn_f="first")
+second_vline = data.frame(xint=4,turn_f="second")
+
+ggplot(p_2_cards_by, aes(draw_num, p))+
+  geom_line(aes(color = mull_strat, group = mull_strat), size = 1.5)+
+  geom_ribbon(data = p_2_cards_by_second, aes(ymin = passive, ymax = aggressive), fill = "grey")+
+  geom_ribbon(data = p_2_cards_by_first, aes(ymin = passive, ymax = aggressive), fill = "grey")+
+  geom_vline(data=first_vline,aes(xintercept=xint),linetype="dotted")+
+  geom_vline(data=second_vline,aes(xintercept=xint),linetype="dotted")+
+  geom_text(data=first_vline,aes(xint,0.5,label = xint, hjust = -1))+
+  geom_text(data=second_vline,aes(xint,0.5,label = xint, hjust = -1))+
+  facet_wrap(~turn_f)+
+  labs(title = "Probability of Drawing Raza and Anduin by Card X", x = "Card X", y = "Probability", color = "Mulligan Strategy")
+ggsave("p_2_cards_by.png")
+```
+
+```{r}
+# Calculates probability of drawing raza by turn raza_by and anduin by 8 depending on whether you go first, your mulligan strategy, the number of extra draws before 8, and if those draws are before or after raza comes down
+p_and_8 <- function(first, mull_strat, draw_place, extra_draws, raza_by){
+  natural_draws_raza = raza_by
+  natural_draws_and = 8 - natural_draws_raza
+  if (first){
+    init_draws = 3
+  }
+  else {
+    init_draws = 4
+  }
+  if (draw_place == "before_raza" | raza_by == 7){
+    draws_before_raza = extra_draws 
+    draws_after_raza = 0
+  }
+  else {
+    draws_before_raza = 0 
+    draws_after_raza = extra_draws
+  }
+  only_and = p_draw_before(30 - (draws_before_raza + natural_draws_raza + init_draws), 1, 0, draws_after_raza + natural_draws_and)
+  if (mull_strat == "passive"){
+    both = p_draw_before(30, 2, 0, draws_before_raza + natural_draws_raza + init_draws)
+    only_raza = p_draw_before(30, 1, 1, draws_before_raza + natural_draws_raza + init_draws)
+  }
+  else {
+    both = p_draw_before_m(30, 2, 0, draws_before_raza + natural_draws_raza + init_draws, first)
+    only_raza = p_draw_before_m(30, 1, 1, draws_before_raza + natural_draws_raza + init_draws, first)
+  }
+  p = both + only_raza * only_and
+  return (both)
+}
+```
+
+```{r}
+p_t_empty = TRUE
+
+for (first in 0:1){
+  for (mull_strat in c("passive", "aggressive")){
+    for (draw_place in c("before_raza", "after_raza")){
+      for (extra_draws in 0:19){
+        for (raza_by in c(5,7)){
+          p = p_and_8(first, mull_strat, draw_place, extra_draws, raza_by)
+          line = data.frame(t(c(first, mull_strat, draw_place, extra_draws, raza_by, p)))
+          if (p_t_empty == FALSE){
+            p_and_8_t = bind_rows(p_and_8_t, line)
+          }
+          if (p_t_empty == TRUE){
+            p_and_8_t = line
+            p_t_empty = FALSE
+          }
+        }
+      }
+    }
+  }
+}
+
+colnames(p_and_8_t) <- c("first", "mull_strat", "draw_place", "extra_draws", "raza_by", "p")
+
+p_and_8_t <-
+  p_and_8_t %>%
+  mutate_at(vars(first, extra_draws, raza_by, p), funs(as.numeric(.))) %>%
+  filter(!(extra_draws >= 1)) %>%
+  mutate(turn = ifelse(first == 1, "first", "second")) %>%
+  mutate(turn_f = factor(turn, levels = c("first", "second")))
+```
+
+```{r}
+r_5 <-
+  p_and_8_t %>%
+  filter(raza_by == 5)
+
+r_7 <-
+  p_and_8_t %>%
+  filter(raza_by == 7) %>%
+  filter(draw_place == "before_raza")
+
+r_7_f <-
+  r_7 %>%
+  filter(turn_f == "first")
+
+r_7_a_f <-
+  r_7_f %>%
+  filter(mull_strat == "aggressive") %>%
+  mutate(aggressive = p) %>%
+  select(extra_draws, turn_f, aggressive)
+
+r_7_p_f <-
+  r_7_f %>%
+  filter(mull_strat == "passive") %>%
+  mutate(passive = p) %>%
+  select(extra_draws, turn_f, passive)
+
+r_7_f <-
+  r_7_a_f %>%
+  left_join(r_7_p_f, by = c("extra_draws", "turn_f"))
+
+r_7_s <-
+  r_7 %>%
+  filter(turn_f == "second")
+
+r_7_a_s <-
+  r_7_s %>%
+  filter(mull_strat == "aggressive") %>%
+  mutate(aggressive = p) %>%
+  select(extra_draws, turn_f, aggressive)
+
+r_7_p_s <-
+  r_7_s %>%
+  filter(mull_strat == "passive") %>%
+  mutate(passive = p) %>%
+  select(extra_draws, turn_f, passive)
+
+r_7_s <-
+  r_7_a_s %>%
+  left_join(r_7_p_s, by = c("extra_draws", "turn_f"))
+
+r_5_s <-
+  r_5 %>%
+  filter(turn_f == "second")
+
+r_5_a_br_s <-
+  r_5_s %>%
+  filter(mull_strat == "aggressive") %>%
+  filter(draw_place == "before_raza") %>%
+  mutate(a_br = p) %>%
+  select(extra_draws, turn_f, a_br)
+  
+r_5_a_ar_s <-
+  r_5_s %>%
+  filter(mull_strat == "aggressive") %>%
+  filter(draw_place == "after_raza") %>%
+  mutate(a_ar = p) %>%
+  select(extra_draws, turn_f, a_ar)
+
+r_5_p_br_s <-
+  r_5_s %>%
+  filter(mull_strat == "passive") %>%
+  filter(draw_place == "before_raza") %>%
+  mutate(p_br = p) %>%
+  select(extra_draws, turn_f, p_br)
+  
+r_5_p_ar_s <-
+  r_5_s %>%
+  filter(mull_strat == "passive") %>%
+  filter(draw_place == "after_raza") %>%
+  mutate(p_ar = p) %>%
+  select(extra_draws, turn_f, p_ar)
+
+r_5_s <-
+  r_5_a_br_s %>%
+  left_join(r_5_a_ar_s, by = c("extra_draws", "turn_f")) %>%
+  left_join(r_5_p_br_s, by = c("extra_draws", "turn_f")) %>%
+  left_join(r_5_p_ar_s, by = c("extra_draws", "turn_f"))
+
+r_5_f <-
+  r_5 %>%
+  filter(turn_f == "first")
+
+r_5_a_br_f <-
+  r_5_f %>%
+  filter(mull_strat == "aggressive") %>%
+  filter(draw_place == "before_raza") %>%
+  mutate(a_br = p) %>%
+  select(extra_draws, turn_f, a_br)
+  
+r_5_a_ar_f <-
+  r_5_f %>%
+  filter(mull_strat == "aggressive") %>%
+  filter(draw_place == "after_raza") %>%
+  mutate(a_ar = p) %>%
+  select(extra_draws, turn_f, a_ar)
+
+r_5_p_br_f <-
+  r_5_f %>%
+  filter(mull_strat == "passive") %>%
+  filter(draw_place == "before_raza") %>%
+  mutate(p_br = p) %>%
+  select(extra_draws, turn_f, p_br)
+  
+r_5_p_ar_f <-
+  r_5_f %>%
+  filter(mull_strat == "passive") %>%
+  filter(draw_place == "after_raza") %>%
+  mutate(p_ar = p) %>%
+  select(extra_draws, turn_f, p_ar)
+
+r_5_f <-
+  r_5_a_br_f %>%
+  left_join(r_5_a_ar_f, by = c("extra_draws", "turn_f")) %>%
+  left_join(r_5_p_br_f, by = c("extra_draws", "turn_f")) %>%
+  left_join(r_5_p_ar_f, by = c("extra_draws", "turn_f"))
+```
+
+```{r}
+ggplot(r_5, aes(extra_draws, p))+
+  geom_line(aes(group = interaction(mull_strat, draw_place), color = mull_strat), size = 1.5)+
+  geom_ribbon(data = r_5_f, aes(ymin = p_ar, ymax = a_ar, fill = "yellow"), alpha = 0.3)+
+  geom_ribbon(data = r_5_f, aes(ymin = p_br, ymax = a_br, fill = "green"), alpha = 0.3)+
+  geom_ribbon(data = r_5_s, aes(ymin = p_ar, ymax = a_ar, fill = "yellow"), alpha = 0.3)+
+  geom_ribbon(data = r_5_s, aes(ymin = p_br, ymax = a_br, fill = "green"), alpha = 0.3)+
+  scale_fill_identity(name = 'Draw Placement', guide = 'legend',labels = c('all before turn 5', 'all after turn 5 and before 8'))+
+  facet_wrap(~turn_f)+
+  ylim(0,1)+
+  labs(title = "Probability of Having Raza by 5 and Anduin by 8", x = "Extra Draws", y = "Probability", color = "Mulligan Strategy")
+ggsave("r_5.png")
+
+ggplot(r_7, aes(extra_draws, p))+
+  geom_line(aes(group = mull_strat, color = mull_strat), size = 1.5)+
+  geom_ribbon(data = r_7_f, aes(ymin = passive, ymax = aggressive), fill = "grey")+
+  geom_ribbon(data = r_7_s, aes(ymin = passive, ymax = aggressive), fill = "grey")+
+  facet_wrap(~turn_f)+
+  ylim(0,1)+
+  labs(title = "Probability of Having Raza by 7 and Anduin by 8", x = "Extra Draws", y = "Probability", color = "Mulligan Strategy")
+ggsave("r_7.png")
+```
+
+```{r}
+library(MASS)
+p_r_5_a_8 = (factorial(9)*choose(28, 9)) / (factorial(11)*choose(30, 11))
+fractions(p_r_5_a_8)
+```
+
+```{r}
+p_t_empty = TRUE
+deck_size = 30
+find_num = 2
+d_find_num = 0
+
+for (first in 0:1){
+  for (cards_found in 0:find_num){
+    p = p_m_find(deck_size, find_num, d_find_num, first, cards_found)
+    line = data.frame(t(c(first, cards_found, p)))
+    if (p_t_empty == FALSE){
+      p_ra_on_curve = bind_rows(p_ra_on_curve, line)
+    }
+    if (p_t_empty == TRUE){
+      p_ra_on_curve = line
+      p_t_empty = FALSE
+    }
+  }
+}
+
+colnames(p_ra_on_curve) <- c("first", "cards_found", "p_m")
+
+p_ra_on_curve <-
+  p_ra_on_curve %>%
+  mutate(p_f = ifelse(cards_found == 0, k, 0)) %>%
+  mutate(p = p_f*p_m)
+```
+
+```{r}
+r_5_and_8_f <-
+  p_ra_on_curve %>%
+  filter(first == 1) %>%
+  group_by(first) %>%
+  summarize(p = sum(p))
+
+r_5_and_8_s <-
+  p_ra_on_curve %>%
+  filter(first == 0) %>%
+  group_by(first) %>%
+  summarize(p = sum(p))
+
+r_5_and_8_m = bind_rows(r_5_and_8_f, r_5_and_8_s)
+```
+
+```{r}
+r_5_and_8_m_first = 1 / round(1 / r_5_and_8$p[1])
+r_5_and_8_m_second = 1 / round(1 / r_5_and_8$p[2])
+fractions(r_5_and_8_m_first)
+fractions(r_5_and_8_m_second)
+```
